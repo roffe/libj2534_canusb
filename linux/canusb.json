@@ -1,0 +1,7 @@
+{
+  "NAME": "CANUSB",
+  "VENDOR": "LAWICEL",
+  "FUNCTION_LIB": "~/.passthru/libj2534_canusb.so",
+  "CAN": true,
+  "ISO15765": true
+}

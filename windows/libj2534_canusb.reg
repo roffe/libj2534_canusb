@@ -1,0 +1,34 @@
+Windows Registry Editor Version 5.00
+
+; Manual J2534 registration for the LAWICEL CANUSB PassThru DLL - what
+; libj2534_canusb_setup.exe writes; prefer the installer. Paths assume the DLLs
+; live in C:\Program Files\libj2534_canusb\ - adjust if elsewhere.
+;
+; 32 bit applications read the WOW6432Node view and get the x86 DLL,
+; 64 bit applications read the native view and get the x64 DLL.
+; On 32 bit windows, use only the second key (without WOW6432Node) and point
+; it at the x86 DLL.
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\PassThruSupport.04.04\LAWICEL - CANUSB]
+"Name"="CANUSB"
+"Vendor"="LAWICEL"
+"FunctionLibrary"="C:\\Program Files\\libj2534_canusb\\libj2534_canusb_x86.dll"
+"ConfigApplication"=""
+"CAN"=dword:00000001
+"ISO15765"=dword:00000001
+"J1850VPW"=dword:00000000
+"J1850PWM"=dword:00000000
+"ISO9141"=dword:00000000
+"ISO14230"=dword:00000000
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\PassThruSupport.04.04\LAWICEL - CANUSB]
+"Name"="CANUSB"
+"Vendor"="LAWICEL"
+"FunctionLibrary"="C:\\Program Files\\libj2534_canusb\\libj2534_canusb_x64.dll"
+"ConfigApplication"=""
+"CAN"=dword:00000001
+"ISO15765"=dword:00000001
+"J1850VPW"=dword:00000000
+"J1850PWM"=dword:00000000
+"ISO9141"=dword:00000000
+"ISO14230"=dword:00000000

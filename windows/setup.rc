@@ -1,0 +1,3 @@
+// Embed both driver DLLs into the installer
+DLL32 RCDATA "build/x86/libj2534_canusb.dll"
+DLL64 RCDATA "build/x64/libj2534_canusb.dll"
