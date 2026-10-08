@@ -30,9 +30,9 @@
 #define API_VERSION "04.04"
 
 #define ACK_TIMEOUT_MS 500
-#define MAX_FILTERS    10
-#define MAX_PERIODIC   10
-#define RXQ_SIZE       16384 // power of two
+#define MAX_FILTERS 10
+#define MAX_PERIODIC 10
+#define RXQ_SIZE 16384 // power of two
 
 typedef struct
 {
@@ -88,7 +88,7 @@ typedef struct
 
 static struct
 {
-	int open;      // PassThruOpen done
+	int open;	   // PassThruOpen done
 	int connected; // CAN channel up
 	volatile int dead;
 	unsigned long baud;
@@ -96,16 +96,16 @@ static struct
 	thread_t *reader;
 	volatile int run;
 
-	mutex_t *cmd_lock;   // serializes command+ack round trips
-	event_t *ack_ev;     // signalled by the reader
+	mutex_t *cmd_lock;	 // serializes command+ack round trips
+	event_t *ack_ev;	 // signalled by the reader
 	volatile int ack_ok; // 1 = CR/z/Z/reply, 0 = BELL
-	char reply[64];      // last non-frame reply line (V/N/F/E)
+	char reply[64];		 // last non-frame reply line (V/N/F/E)
 	volatile int reply_len;
 
 	mutex_t *q_lock;
 	rxrec_t rxq[RXQ_SIZE];
 	volatile unsigned q_head, q_tail; // head = write position
-	event_t *rx_ev;                   // set on enqueue
+	event_t *rx_ev;					  // set on enqueue
 
 	filter_t filters[MAX_FILTERS];
 	int have_pass_filter;
@@ -116,15 +116,15 @@ static struct
 	volatile int per_run;
 
 	// ISO15765 state (proto == ISO15765)
-	unsigned long proto;             // CAN or ISO15765 for the open channel
+	unsigned long proto;			 // CAN or ISO15765 for the open channel
 	unsigned long iso_bs, iso_stmin; // advertised in the flow controls we send
-	isotp_rx_t iso_rx[MAX_FILTERS];  // one reassembly per conversation
-	isorec_t isoq[ISOQ_SIZE];        // q_lock protected, like rxq
+	isotp_rx_t iso_rx[MAX_FILTERS];	 // one reassembly per conversation
+	isorec_t isoq[ISOQ_SIZE];		 // q_lock protected, like rxq
 	volatile unsigned iq_head, iq_tail;
 	fcreq_t fcq[FCQ_SIZE]; // q_lock protected
 	volatile unsigned fq_head, fq_tail;
 	volatile int txconv; // filter index awaiting a flow control, -1 none
-	event_t *fc_ev;      // reader signals when that FC arrives
+	event_t *fc_ev;		 // reader signals when that FC arrives
 	volatile int fc_fs, fc_bs, fc_stmin;
 } dev;
 
@@ -182,7 +182,7 @@ static int filters_accept(const rxrec_t *r)
 // Queue a message (or indication) for an ISO15765 PassThruReadMsgs.
 // payload may be NULL for indications (id only, len must be 0).
 static void iso_enqueue(uint32_t id, int ext, unsigned long rxstatus,
-                        const uint8_t *payload, unsigned len)
+						const uint8_t *payload, unsigned len)
 {
 	mutex_lock(dev.q_lock);
 	unsigned next = (dev.iq_head + 1) & (ISOQ_SIZE - 1);
@@ -527,29 +527,41 @@ int32_t J2534_API PassThruClose(uint32_t DeviceID)
 
 // ---------------------------------------------------------------- channel --
 
-static int baud_to_preset(unsigned long baud, char *out)
+// S0..S8 are the presets every CANUSB has. Other rates go out as an SJA1000 BTR0/BTR1 pair
+// (sXXYY, 16 MHz)
+static const char *baud_to_cmd(unsigned long baud)
 {
-	static const struct { unsigned long baud; char code; } map[] = {
-		{10000, '0'}, {20000, '1'}, {50000, '2'}, {100000, '3'},
-		{125000, '4'}, {250000, '5'}, {500000, '6'}, {800000, '7'},
-		{1000000, '8'}, {615384, '9'}, {615000, '9'}, {83333, 'a'},
+	static const struct
+	{
+		unsigned long baud;
+		const char *cmd;
+	} map[] = {
+		{10000, "S0\r"},
+		{20000, "S1\r"},
+		{50000, "S2\r"},
+		{100000, "S3\r"},
+		{125000, "S4\r"},
+		{250000, "S5\r"},
+		{500000, "S6\r"},
+		{800000, "S7\r"},
+		{1000000, "S8\r"},
+		{615384, "s4037\r"},
+		{615000, "s4037\r"}, // Trionic 5 P-bus, TrionicCANLib's CAN_BAUD_BTR_615K
+		{83333, "s852B\r"},	 // PCAN_BAUD_83K: 16tq x 750ns, 81% sample point
 	};
 	for (unsigned i = 0; i < sizeof(map) / sizeof(map[0]); i++)
 	{
 		if (map[i].baud == baud)
-		{
-			*out = map[i].code;
-			return 1;
-		}
+			return map[i].cmd;
 	}
-	return 0;
+	return NULL;
 }
 
 int32_t J2534_API PassThruConnect(uint32_t DeviceID, uint32_t ProtocolID,
-                                  uint32_t Flags, uint32_t BaudRate, uint32_t *pChannelID)
+								  uint32_t Flags, uint32_t BaudRate, uint32_t *pChannelID)
 {
 	(void)Flags;
-	char code;
+	const char *scmd;
 
 	if (DeviceID != 1 || !dev.open)
 	{
@@ -568,16 +580,15 @@ int32_t J2534_API PassThruConnect(uint32_t DeviceID, uint32_t ProtocolID,
 		seterr("channel already connected");
 		return ERR_CHANNEL_IN_USE;
 	}
-	if (!baud_to_preset(BaudRate, &code))
+	if (!(scmd = baud_to_cmd(BaudRate)))
 	{
 		seterr("unsupported bitrate %lu", (unsigned long)BaudRate);
 		return ERR_INVALID_BAUDRATE;
 	}
 
-	char scmd[4] = {'S', code, '\r', 0};
 	send_cmd("C\r", 2, NULL, 0); // make sure it's closed before S
 	send_cmd("Z0\r", 3, NULL, 0);
-	if (send_cmd(scmd, 3, NULL, 0) != STATUS_NOERROR)
+	if (send_cmd(scmd, (int)strlen(scmd), NULL, 0) != STATUS_NOERROR)
 	{
 		seterr("device rejected bitrate %lu", (unsigned long)BaudRate);
 		return ERR_INVALID_BAUDRATE;
@@ -629,7 +640,7 @@ int32_t J2534_API PassThruDisconnect(uint32_t ChannelID)
 // --------------------------------------------------------------- messages --
 
 int32_t J2534_API PassThruReadMsgs(uint32_t ChannelID, PASSTHRU_MSG *pMsg,
-                                   uint32_t *pNumMsgs, uint32_t Timeout)
+								   uint32_t *pNumMsgs, uint32_t Timeout)
 {
 	if (ChannelID != 1 || !dev.connected)
 		return ERR_INVALID_CHANNEL_ID;
@@ -723,7 +734,7 @@ static long iso_write(PASSTHRU_MSG *m)
 	}
 
 	uint32_t id = ((uint32_t)m->Data[0] << 24) | ((uint32_t)m->Data[1] << 16) |
-	              ((uint32_t)m->Data[2] << 8) | m->Data[3];
+				  ((uint32_t)m->Data[2] << 8) | m->Data[3];
 	int ext = (m->TxFlags & CAN_29BIT_ID) != 0;
 	int pad = (m->TxFlags & ISO15765_FRAME_PAD) != 0;
 	const uint8_t *p = m->Data + 4;
@@ -752,7 +763,7 @@ static long iso_write(PASSTHRU_MSG *m)
 	for (int i = 0; i < MAX_FILTERS; i++)
 	{
 		if (dev.filters[i].used && dev.filters[i].fcid == id &&
-		    dev.filters[i].ext == (uint8_t)ext)
+			dev.filters[i].ext == (uint8_t)ext)
 		{
 			conv = i;
 			break;
@@ -826,7 +837,7 @@ static long iso_write(PASSTHRU_MSG *m)
 }
 
 int32_t J2534_API PassThruWriteMsgs(uint32_t ChannelID, PASSTHRU_MSG *pMsg,
-                                    uint32_t *pNumMsgs, uint32_t Timeout)
+									uint32_t *pNumMsgs, uint32_t Timeout)
 {
 	(void)Timeout; // every write is synchronous: sent and acked, or failed
 
@@ -858,9 +869,9 @@ int32_t J2534_API PassThruWriteMsgs(uint32_t ChannelID, PASSTHRU_MSG *pMsg,
 		else
 		{
 			uint32_t id = ((uint32_t)m->Data[0] << 24) | ((uint32_t)m->Data[1] << 16) |
-			              ((uint32_t)m->Data[2] << 8) | m->Data[3];
+						  ((uint32_t)m->Data[2] << 8) | m->Data[3];
 			rc = send_frame(id, (m->TxFlags & CAN_29BIT_ID) != 0,
-			                m->Data + 4, (int)m->DataSize - 4);
+							m->Data + 4, (int)m->DataSize - 4);
 		}
 
 		if (rc != STATUS_NOERROR)
@@ -877,8 +888,8 @@ int32_t J2534_API PassThruWriteMsgs(uint32_t ChannelID, PASSTHRU_MSG *pMsg,
 // ---------------------------------------------------- filters and periodic --
 
 int32_t J2534_API PassThruStartMsgFilter(uint32_t ChannelID, uint32_t FilterType,
-                                         PASSTHRU_MSG *pMaskMsg, PASSTHRU_MSG *pPatternMsg,
-                                         PASSTHRU_MSG *pFlowControlMsg, uint32_t *pFilterID)
+										 PASSTHRU_MSG *pMaskMsg, PASSTHRU_MSG *pPatternMsg,
+										 PASSTHRU_MSG *pFlowControlMsg, uint32_t *pFilterID)
 {
 	if (ChannelID != 1 || !dev.connected)
 		return ERR_INVALID_CHANNEL_ID;
@@ -897,7 +908,7 @@ int32_t J2534_API PassThruStartMsgFilter(uint32_t ChannelID, uint32_t FilterType
 		if (!pFlowControlMsg)
 			return ERR_NULL_PARAMETER;
 		if (pMaskMsg->DataSize != 4 || pPatternMsg->DataSize != 4 ||
-		    pFlowControlMsg->DataSize != 4)
+			pFlowControlMsg->DataSize != 4)
 		{
 			seterr("ISO15765 filter msgs must be exactly 4 bytes (CAN id)");
 			return ERR_INVALID_MSG;
@@ -920,9 +931,9 @@ int32_t J2534_API PassThruStartMsgFilter(uint32_t ChannelID, uint32_t FilterType
 			memcpy(f->mask, pMaskMsg->Data, 4);
 			memcpy(f->pattern, pPatternMsg->Data, 4);
 			f->fcid = ((uint32_t)pFlowControlMsg->Data[0] << 24) |
-			          ((uint32_t)pFlowControlMsg->Data[1] << 16) |
-			          ((uint32_t)pFlowControlMsg->Data[2] << 8) |
-			          pFlowControlMsg->Data[3];
+					  ((uint32_t)pFlowControlMsg->Data[1] << 16) |
+					  ((uint32_t)pFlowControlMsg->Data[2] << 8) |
+					  pFlowControlMsg->Data[3];
 			f->ext = (pFlowControlMsg->TxFlags & CAN_29BIT_ID) != 0;
 			f->pad = (pFlowControlMsg->TxFlags & ISO15765_FRAME_PAD) != 0;
 			memset(&dev.iso_rx[i], 0, sizeof(dev.iso_rx[i]));
@@ -941,7 +952,7 @@ int32_t J2534_API PassThruStartMsgFilter(uint32_t ChannelID, uint32_t FilterType
 	if (FilterType != PASS_FILTER && FilterType != BLOCK_FILTER)
 		return ERR_INVALID_MSG;
 	if (pMaskMsg->DataSize < 1 || pMaskMsg->DataSize > 12 ||
-	    pMaskMsg->DataSize != pPatternMsg->DataSize)
+		pMaskMsg->DataSize != pPatternMsg->DataSize)
 	{
 		seterr("mask and pattern must be equal length, 1..12 bytes");
 		return ERR_INVALID_MSG;
@@ -981,7 +992,7 @@ int32_t J2534_API PassThruStopMsgFilter(uint32_t ChannelID, uint32_t FilterID)
 }
 
 int32_t J2534_API PassThruStartPeriodicMsg(uint32_t ChannelID, PASSTHRU_MSG *pMsg,
-                                           uint32_t *pMsgID, uint32_t TimeInterval)
+										   uint32_t *pMsgID, uint32_t TimeInterval)
 {
 	if (ChannelID != 1 || !dev.connected)
 		return ERR_INVALID_CHANNEL_ID;
@@ -993,7 +1004,7 @@ int32_t J2534_API PassThruStartPeriodicMsg(uint32_t ChannelID, PASSTHRU_MSG *pMs
 		return ERR_MSG_PROTOCOL_ID;
 	// ISO15765 periodics (e.g. tester present) must fit a single frame
 	if (dev.proto == ISO15765 ? (pMsg->DataSize < 5 || pMsg->DataSize > 11)
-	                          : (pMsg->DataSize < 4 || pMsg->DataSize > 12))
+							  : (pMsg->DataSize < 4 || pMsg->DataSize > 12))
 		return ERR_INVALID_MSG;
 
 	for (int i = 0; i < MAX_PERIODIC; i++)
@@ -1002,7 +1013,7 @@ int32_t J2534_API PassThruStartPeriodicMsg(uint32_t ChannelID, PASSTHRU_MSG *pMs
 		if (p->used)
 			continue;
 		p->id = ((uint32_t)pMsg->Data[0] << 24) | ((uint32_t)pMsg->Data[1] << 16) |
-		        ((uint32_t)pMsg->Data[2] << 8) | pMsg->Data[3];
+				((uint32_t)pMsg->Data[2] << 8) | pMsg->Data[3];
 		p->ext = (pMsg->TxFlags & CAN_29BIT_ID) != 0;
 		if (dev.proto == ISO15765)
 		{
@@ -1042,7 +1053,7 @@ int32_t J2534_API PassThruStopPeriodicMsg(uint32_t ChannelID, uint32_t MsgID)
 // ------------------------------------------------------------------ misc --
 
 int32_t J2534_API PassThruSetProgrammingVoltage(uint32_t DeviceID, uint32_t PinNumber,
-                                                uint32_t Voltage)
+												uint32_t Voltage)
 {
 	(void)PinNumber;
 	if (DeviceID != 1 || !dev.open)
@@ -1055,7 +1066,7 @@ int32_t J2534_API PassThruSetProgrammingVoltage(uint32_t DeviceID, uint32_t PinN
 }
 
 int32_t J2534_API PassThruReadVersion(uint32_t DeviceID, char *pFirmwareVersion,
-                                      char *pDllVersion, char *pApiVersion)
+									  char *pDllVersion, char *pApiVersion)
 {
 	if (DeviceID != 1 || !dev.open)
 		return ERR_INVALID_DEVICE_ID;
@@ -1065,7 +1076,7 @@ int32_t J2534_API PassThruReadVersion(uint32_t DeviceID, char *pFirmwareVersion,
 	// V reply is Vhhss: two digits hardware, two digits software
 	char reply[64] = {0};
 	if (send_cmd("V\r", 2, reply, sizeof(reply)) == STATUS_NOERROR && reply[0] == 'V' &&
-	    strlen(reply) >= 5)
+		strlen(reply) >= 5)
 		snprintf(pFirmwareVersion, 20, "%c%c.%c%c", reply[1], reply[2], reply[3], reply[4]);
 	else
 		strcpy(pFirmwareVersion, "unknown");
@@ -1084,7 +1095,7 @@ int32_t J2534_API PassThruGetLastError(char *pErrorDescription)
 }
 
 int32_t J2534_API PassThruIoctl(uint32_t ChannelID, uint32_t IoctlID,
-                                void *pInput, void *pOutput)
+								void *pInput, void *pOutput)
 {
 	(void)pOutput; // only used by ioctls this device doesn't have
 
@@ -1139,12 +1150,11 @@ int32_t J2534_API PassThruIoctl(uint32_t ChannelID, uint32_t IoctlID,
 			}
 			else if (c->Parameter == DATA_RATE && dev.connected)
 			{
-				char code;
-				if (!baud_to_preset(c->Value, &code))
+				const char *scmd = baud_to_cmd(c->Value);
+				if (!scmd)
 					return ERR_INVALID_BAUDRATE;
-				char scmd[4] = {'S', code, '\r', 0};
 				send_cmd("C\r", 2, NULL, 0);
-				send_cmd(scmd, 3, NULL, 0);
+				send_cmd(scmd, (int)strlen(scmd), NULL, 0);
 				if (send_cmd("O\r", 2, NULL, 0) != STATUS_NOERROR)
 					return ERR_FAILED;
 				dev.baud = c->Value;
